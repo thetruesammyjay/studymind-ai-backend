@@ -31,7 +31,12 @@ class Settings(BaseSettings):
                 v = v.replace("postgres://", "postgresql+asyncpg://", 1)
              if v.startswith("postgresql://") and "asyncpg" not in v:
                 v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
-             # We no longer strip query parameters as they are needed for SSL (ssl=require)
+             # asyncpg uses 'ssl' not 'sslmode', and doesn't support 'channel_binding'
+             if "asyncpg" in v:
+                v = v.replace("sslmode=", "ssl=")
+                # Remove channel_binding param (not supported by asyncpg)
+                import re
+                v = re.sub(r"[&?]channel_binding=[^&]*", "", v)
         return v
 
 @lru_cache
