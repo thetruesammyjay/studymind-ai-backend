@@ -52,25 +52,17 @@ class SessionService:
         self.db.add(user_msg)
         await self.db.commit()
 
-        # 2. Score sentiment (fire-and-forget logic corrected: await it for safety in this scope or assume proper managing)
-        # For true background task without blocking:
-        # We need to ensure db session is safe. 
-        # Since we are inside a request scope usually, awaiting it is safer for data consistency vs race conditions on closing.
-        # But to be "optimised", maybe fire and forget? 
-        # I'll await it to ensure it's saved, as sentiment model is fast enough (CPU inference).
-        await self.sentiment.score_and_publish(session.id, content)
-
-        # 3. Build context window
+        # 2. Build context window
         history = await self._get_history(session.id)
         prompt = self._build_prompt(history, content)
 
-        # 4. Stream Gemini response
+        # 3. Stream Gemini response
         ai_content = []
         async for token in self.gemini.stream(prompt):
             ai_content.append(token)
             yield token
 
-        # 5. Persist AI message
+        # 4. Persist AI message
         ai_msg = Message(
             session_id=session.id,
             role="assistant",
@@ -78,6 +70,13 @@ class SessionService:
         )
         self.db.add(ai_msg)
         await self.db.commit()
+
+        # 5. Score sentiment (after streaming, non-blocking)
+        try:
+            await self.sentiment.score_and_publish(session.id, content)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Sentiment scoring failed (non-critical): {e}")
 
     async def _get_history(self, session_id: uuid.UUID) -> list[Message]:
         result = await self.db.execute(
