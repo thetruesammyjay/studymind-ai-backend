@@ -1,3 +1,7 @@
+import logging
+import traceback
+import uuid
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db
@@ -6,6 +10,8 @@ from app.services.session_service import SessionService
 from app.services.gemini_service import GeminiService
 from app.services.sentiment_service import SentimentService
 from app.models.session import StudySession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
@@ -21,14 +27,18 @@ class ConnectionManager:
 
     def disconnect(self, session_id: str, websocket: WebSocket):
         if session_id in self.active_connections:
-            self.active_connections[session_id].remove(websocket)
+            if websocket in self.active_connections[session_id]:
+                self.active_connections[session_id].remove(websocket)
             if not self.active_connections[session_id]:
                 del self.active_connections[session_id]
 
     async def send_to_session(self, session_id: str, message: dict):
         if session_id in self.active_connections:
             for conn in self.active_connections[session_id]:
-                await conn.send_json(message)
+                try:
+                    await conn.send_json(message)
+                except Exception:
+                    pass
 
 manager = ConnectionManager()
 
@@ -48,15 +58,16 @@ async def websocket_endpoint(
         service = SessionService(db, gemini, sentiment)
         
         # Verify session exists
-        import uuid
         try:
             session_uuid = uuid.UUID(session_id)
         except ValueError:
+            await websocket.send_json({"type": "error", "content": "Invalid session ID"})
             await websocket.close(code=1008)
             return
 
         session = await db.get(StudySession, session_uuid)
         if not session:
+            await websocket.send_json({"type": "error", "content": "Session not found"})
             await websocket.close(code=1008)
             return
 
@@ -65,20 +76,26 @@ async def websocket_endpoint(
             content = data.get("content")
             if not content:
                 continue
-                
-            async for token in service.process_message(
-                session=session,
-                content=content,
-                input_mode="text",
-            ):
-                await manager.send_to_session(session_id, {"type": "token", "content": token})
             
-            # End of stream marker
-            await manager.send_to_session(session_id, {"type": "end"})
+            try:
+                async for token in service.process_message(
+                    session=session,
+                    content=content,
+                    input_mode="text",
+                ):
+                    await manager.send_to_session(session_id, {"type": "token", "content": token})
+                
+                # End of stream marker
+                await manager.send_to_session(session_id, {"type": "end"})
+            except Exception as e:
+                logger.error(f"Error processing message: {e}\n{traceback.format_exc()}")
+                await manager.send_to_session(session_id, {
+                    "type": "error",
+                    "content": f"Failed to process message: {str(e)}"
+                })
 
     except WebSocketDisconnect:
         manager.disconnect(session_id, websocket)
     except Exception as e:
-        # Log error
-        print(f"WebSocket Error: {e}")
+        logger.error(f"WebSocket Error: {e}\n{traceback.format_exc()}")
         manager.disconnect(session_id, websocket)
