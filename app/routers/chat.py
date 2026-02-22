@@ -24,6 +24,7 @@ class ConnectionManager:
         if session_id not in self.active_connections:
             self.active_connections[session_id] = []
         self.active_connections[session_id].append(websocket)
+        logger.info(f"[WS] Connected. Session={session_id}, total connections={len(self.active_connections[session_id])}")
 
     def disconnect(self, session_id: str, websocket: WebSocket):
         if session_id in self.active_connections:
@@ -31,14 +32,15 @@ class ConnectionManager:
                 self.active_connections[session_id].remove(websocket)
             if not self.active_connections[session_id]:
                 del self.active_connections[session_id]
+        logger.info(f"[WS] Disconnected. Session={session_id}")
 
     async def send_to_session(self, session_id: str, message: dict):
         if session_id in self.active_connections:
             for conn in self.active_connections[session_id]:
                 try:
                     await conn.send_json(message)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"[WS] Failed to send to connection: {e}")
 
 manager = ConnectionManager()
 
@@ -61,41 +63,52 @@ async def websocket_endpoint(
         try:
             session_uuid = uuid.UUID(session_id)
         except ValueError:
+            logger.error(f"[WS] Invalid session UUID: {session_id}")
             await websocket.send_json({"type": "error", "content": "Invalid session ID"})
             await websocket.close(code=1008)
             return
 
         session = await db.get(StudySession, session_uuid)
         if not session:
+            logger.error(f"[WS] Session not found: {session_id}")
             await websocket.send_json({"type": "error", "content": "Session not found"})
             await websocket.close(code=1008)
             return
 
+        logger.info(f"[WS] Session verified, waiting for messages...")
+
         while True:
             data = await websocket.receive_json()
             content = data.get("content")
+            logger.info(f"[WS] Received message: '{content[:50] if content else 'EMPTY'}'")
+            
             if not content:
                 continue
             
             try:
+                logger.info(f"[WS] Processing message with Gemini...")
+                token_count = 0
                 async for token in service.process_message(
                     session=session,
                     content=content,
                     input_mode="text",
                 ):
+                    token_count += 1
                     await manager.send_to_session(session_id, {"type": "token", "content": token})
                 
+                logger.info(f"[WS] Stream complete. Sent {token_count} tokens.")
                 # End of stream marker
                 await manager.send_to_session(session_id, {"type": "end"})
             except Exception as e:
-                logger.error(f"Error processing message: {e}\n{traceback.format_exc()}")
+                logger.error(f"[WS] Error processing message: {e}\n{traceback.format_exc()}")
                 await manager.send_to_session(session_id, {
                     "type": "error",
-                    "content": f"Failed to process message: {str(e)}"
+                    "content": f"Failed to process: {str(e)}"
                 })
 
     except WebSocketDisconnect:
+        logger.info(f"[WS] Client disconnected: {session_id}")
         manager.disconnect(session_id, websocket)
     except Exception as e:
-        logger.error(f"WebSocket Error: {e}\n{traceback.format_exc()}")
+        logger.error(f"[WS] Unexpected error: {e}\n{traceback.format_exc()}")
         manager.disconnect(session_id, websocket)
