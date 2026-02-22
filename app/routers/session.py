@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from typing import List
 from uuid import UUID
 
@@ -21,8 +22,6 @@ async def create_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Determine correct service initialization
-    # SessionService requires GeminiService and SentimentService
     settings = get_settings()
     gemini = GeminiService(settings)
     sentiment = SentimentService(db, gemini)
@@ -32,6 +31,8 @@ async def create_session(
         user_id=current_user.id,
         subject_id=session_data.subject_id
     )
+    # Eagerly load messages to avoid MissingGreenlet in async context
+    await db.refresh(session, attribute_names=["messages"])
     return session
 
 @router.get("", response_model=List[SessionResponse])
@@ -40,7 +41,9 @@ async def list_sessions(
     db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
-        select(StudySession).where(StudySession.user_id == current_user.id)
+        select(StudySession)
+        .where(StudySession.user_id == current_user.id)
+        .options(selectinload(StudySession.messages))
     )
     return result.scalars().all()
 
@@ -50,7 +53,12 @@ async def get_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    session = await db.get(StudySession, session_id)
+    result = await db.execute(
+        select(StudySession)
+        .where(StudySession.id == session_id)
+        .options(selectinload(StudySession.messages))
+    )
+    session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session.user_id != current_user.id:
