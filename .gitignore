@@ -1,0 +1,59 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ── Virtual environments ──
+.venv/
+venv/
+ENV/
+
+# ── Distribution / packaging ──
+dist/
+build/
+*.egg-info/
+*.egg
+
+# ── Environment variables ──
+.env
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Testing ──
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── mypy ──
+.mypy_cache/
+
+# ── Ruff ──
+.ruff_cache/
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+
+# ── uv ──
+uv.lock
+
+# ── Alembic ──
+alembic/versions/__pycache__/
+
+# ── Internal / dev-only docs ──
+command.md
+CONTEXT.md
+ENDPOINT.md
+FILE-STRUCTURE.md
+NEON_SETUP.md
+uv-setup-guide.md
+reproduce_config_issue.py
+update_env.py
+verify_db_connection.py
